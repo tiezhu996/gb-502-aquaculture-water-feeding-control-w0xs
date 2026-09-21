@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { CircleCheck, Grid, Plus, Search, Warning } from '@element-plus/icons-vue'
+import { CircleCheck, Grid, Lock, Plus, Search, Warning } from '@element-plus/icons-vue'
 import { pondApi } from '@/api/ponds'
 import { readingApi } from '@/api/readings'
 import MetricCard from '@/components/common/MetricCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import RiskTag from '@/components/common/RiskTag.vue'
+import RestrictionGate from '@/components/common/RestrictionGate.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useAuth } from '@/hooks/useAuth'
 import { useQueryParams } from '@/hooks/useQueryParams'
+import { useRestrictions } from '@/hooks/useRestrictions'
 import type { Pond, PondInput, WaterReading } from '@/types/models'
 import type { RiskLevel } from '@/types/enums'
 import { formatNumber } from '@/utils/format'
@@ -17,6 +19,7 @@ import { errorMessage } from '@/utils/errors'
 
 const { canManagePonds } = useAuth()
 const { params } = useQueryParams({ search: '', status: '', page: 1 })
+const { openByPond, load: loadRestrictions } = useRestrictions()
 const loading = ref(false)
 const saving = ref(false)
 const ponds = ref<Pond[]>([])
@@ -31,7 +34,7 @@ const form = reactive<PondInput>(emptyForm())
 
 const activeCount = computed(() => ponds.value.filter((item) => item.status === 'active').length)
 const quarantineCount = computed(() => ponds.value.filter((item) => item.status === 'quarantine').length)
-const capacity = computed(() => ponds.value.reduce((sum, item) => sum + item.capacityKg, 0))
+const gatedCount = computed(() => ponds.value.filter((item) => openByPond.value.has(item.id)).length)
 const latestRisk = computed(() => {
   const map = new Map<number, RiskLevel>()
   for (const item of readings.value) if (!map.has(item.pondId)) map.set(item.pondId, item.riskLevel)
@@ -48,6 +51,7 @@ async function load() {
     ponds.value = pondResult.items
     total.value = pondResult.total
     readings.value = readingResult.items
+    await loadRestrictions()
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
@@ -118,7 +122,7 @@ onMounted(load)
       <MetricCard label="养殖池总数" :value="total" :icon="Grid" hint="当前管辖" />
       <MetricCard label="运行中" :value="activeCount" :icon="CircleCheck" tone="blue" hint="可执行投喂" />
       <MetricCard label="隔离观察" :value="quarantineCount" :icon="Warning" tone="amber" hint="需续评水质" />
-      <MetricCard label="页内养殖容量" :value="`${formatNumber(capacity / 1000)} t`" :icon="Grid" tone="green" />
+      <MetricCard label="停喂闸门" :value="gatedCount" :icon="Lock" tone="red" hint="严重异常自动建立" />
     </section>
     <section class="workspace-panel">
       <div class="panel-toolbar">
@@ -136,6 +140,7 @@ onMounted(load)
         <el-table-column label="面积 / 容量" min-width="150"><template #default="{ row }">{{ formatNumber(row.areaSquareMeters, 0) }} ㎡ / {{ formatNumber(row.capacityKg / 1000) }} t</template></el-table-column>
         <el-table-column label="负责人" prop="manager" min-width="100" />
         <el-table-column label="水质风险" width="100"><template #default="{ row }"><RiskTag :level="latestRisk.get(row.id) || (row.status === 'quarantine' ? 'warning' : 'normal')" /></template></el-table-column>
+        <el-table-column label="投喂闸门" width="120"><template #default="{ row }"><RestrictionGate v-if="openByPond.get(row.id)" :restriction="openByPond.get(row.id)!" @changed="load" /><span v-else class="muted">—</span></template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
         <el-table-column v-if="canManagePonds()" label="操作" width="130" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link type="danger" @click="target = row; deleteOpen = true">删除</el-button></template></el-table-column>
       </el-table>

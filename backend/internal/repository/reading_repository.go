@@ -60,8 +60,9 @@ func (r *ReadingRepository) Delete(reading *model.WaterReading) error {
 	return r.db.Delete(reading).Error
 }
 
+// LatestForPond 返回养殖池最新一条水质读数；测量时间相同时以最新录入（更大 ID）为准。
 func (r *ReadingRepository) LatestForPond(pondID uint) (model.WaterReading, error) {
 	var reading model.WaterReading
-	err := r.db.Where("pond_id = ?", pondID).Order("measured_at DESC").First(&reading).Error
+	err := r.db.Where("pond_id = ?", pondID).Order("measured_at DESC, id DESC").First(&reading).Error
 	return reading, err
 }

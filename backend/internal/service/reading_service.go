@@ -15,19 +15,32 @@ import (
 type ReadingService struct {
 	repo          *repository.ReadingRepository
 	ponds         *repository.PondRepository
+	restrictions  *RestrictionService
 	audit         *AuditService
 	transactional bool
 }
 
 func (s *ReadingService) withinTransaction(fn func(*ReadingService) error) error {
 	return s.audit.WithinTransaction(func(tx *gorm.DB, audit *AuditService) error {
-		scoped := &ReadingService{repo: repository.NewReadingRepository(tx), ponds: repository.NewPondRepository(tx), audit: audit, transactional: true}
+		scoped := &ReadingService{
+			repo:  repository.NewReadingRepository(tx),
+			ponds: repository.NewPondRepository(tx),
+			restrictions: &RestrictionService{
+				repo:          repository.NewRestrictionRepository(tx),
+				ponds:         repository.NewPondRepository(tx),
+				readings:      repository.NewReadingRepository(tx),
+				audit:         audit,
+				transactional: true,
+			},
+			audit:         audit,
+			transactional: true,
+		}
 		return fn(scoped)
 	})
 }
 
-func NewReadingService(repo *repository.ReadingRepository, ponds *repository.PondRepository, audit *AuditService) *ReadingService {
-	return &ReadingService{repo: repo, ponds: ponds, audit: audit}
+func NewReadingService(repo *repository.ReadingRepository, ponds *repository.PondRepository, restrictions *RestrictionService, audit *AuditService) *ReadingService {
+	return &ReadingService{repo: repo, ponds: ponds, restrictions: restrictions, audit: audit}
 }
 
 func (s *ReadingService) List(query dto.PageQuery, pondID uint, unconfirmed bool) (dto.PageResult[model.WaterReading], error) {
@@ -91,6 +104,13 @@ func (s *ReadingService) Create(input dto.WaterReadingInput, actor Actor) (model
 	reading.Pond = &pond
 	if err := s.audit.Record(actor, "create", "water_reading", reading.ID, nil, reading, message); err != nil {
 		return model.WaterReading{}, err
+	}
+	// 严重水质异常：与读数同一事务自动建立停喂安全闸门；
+	// 重复或并发严重读数且闸门未解除时不重复建限。
+	if risk == constants.RiskCritical {
+		if _, _, err := s.restrictions.EnsureForCritical(reading, actor); err != nil {
+			return model.WaterReading{}, err
+		}
 	}
 	return reading, nil
 }

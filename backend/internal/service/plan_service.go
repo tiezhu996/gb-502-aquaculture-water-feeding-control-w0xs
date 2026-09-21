@@ -17,6 +17,7 @@ type PlanService struct {
 	repo          *repository.PlanRepository
 	ponds         *repository.PondRepository
 	readings      *repository.ReadingRepository
+	restrictions  *RestrictionService
 	audit         *AuditService
 	transactional bool
 }
@@ -25,7 +26,16 @@ func (s *PlanService) withinTransaction(fn func(*PlanService) error) error {
 	return s.audit.WithinTransaction(func(tx *gorm.DB, audit *AuditService) error {
 		scoped := &PlanService{
 			repo: repository.NewPlanRepository(tx), ponds: repository.NewPondRepository(tx),
-			readings: repository.NewReadingRepository(tx), audit: audit, transactional: true,
+			readings: repository.NewReadingRepository(tx),
+			restrictions: &RestrictionService{
+				repo:          repository.NewRestrictionRepository(tx),
+				ponds:         repository.NewPondRepository(tx),
+				readings:      repository.NewReadingRepository(tx),
+				audit:         audit,
+				transactional: true,
+			},
+			audit:         audit,
+			transactional: true,
 		}
 		return fn(scoped)
 	})
@@ -106,8 +116,8 @@ func (s *PlanService) Recommendation(pondID uint, weather string) (dto.FeedingRe
 	}, nil
 }
 
-func NewPlanService(repo *repository.PlanRepository, ponds *repository.PondRepository, readings *repository.ReadingRepository, audit *AuditService) *PlanService {
-	return &PlanService{repo: repo, ponds: ponds, readings: readings, audit: audit}
+func NewPlanService(repo *repository.PlanRepository, ponds *repository.PondRepository, readings *repository.ReadingRepository, restrictions *RestrictionService, audit *AuditService) *PlanService {
+	return &PlanService{repo: repo, ponds: ponds, readings: readings, restrictions: restrictions, audit: audit}
 }
 
 func (s *PlanService) List(query dto.PageQuery, pondID uint) (dto.PageResult[model.FeedingPlan], error) {
@@ -239,6 +249,10 @@ func (s *PlanService) Approve(id uint, reason string, actor Actor) (model.Feedin
 	}
 	if pond.Status != constants.PondStatusActive {
 		return model.FeedingPlan{}, NewError(CodeConflict, "只有运行中养殖池的计划可批准")
+	}
+	// 投喂安全闸门：存在未解除停喂限制时（含待主管复核）一律不得批准。
+	if err := s.restrictions.RequireFeedingAllowed(plan.PondID, "计划批准"); err != nil {
+		return model.FeedingPlan{}, err
 	}
 	latest, err := s.readings.LatestForPond(plan.PondID)
 	if err == gorm.ErrRecordNotFound {

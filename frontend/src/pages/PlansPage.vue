@@ -6,15 +6,18 @@ import { planApi } from '@/api/plans'
 import { pondApi } from '@/api/ponds'
 import MetricCard from '@/components/common/MetricCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import RestrictionGate from '@/components/common/RestrictionGate.vue'
 import PlanDrawer from '@/components/common/PlanDrawer.vue'
 import { useAuth } from '@/hooks/useAuth'
 import { useQueryParams } from '@/hooks/useQueryParams'
+import { useRestrictions } from '@/hooks/useRestrictions'
 import type { FeedingPlan, FeedingPlanInput, FeedingRecommendation, Pond } from '@/types/models'
 import { errorMessage } from '@/utils/errors'
 import { formatDateTime, formatNumber, toISO, toLocalInput } from '@/utils/format'
 
 const { canOperate, canReview } = useAuth()
 const { params } = useQueryParams({ search: '', status: '', pondId: '', page: 1 })
+const { openByPond, load: loadRestrictions } = useRestrictions()
 const plans = ref<FeedingPlan[]>([])
 const ponds = ref<Pond[]>([])
 const total = ref(0)
@@ -50,6 +53,7 @@ async function load() {
     plans.value = result.items
     total.value = result.total
     ponds.value = pondResult.items
+    await loadRestrictions()
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
@@ -174,10 +178,14 @@ onMounted(load)
         <el-table-column label="饲料 / 阶段" min-width="160"><template #default="{ row }"><div class="primary-cell"><span>{{ row.feedType }}</span><small>{{ row.targetGrowthStage }}</small></div></template></el-table-column>
         <el-table-column label="计划周期" min-width="170"><template #default="{ row }">{{ formatDateTime(row.startDate).slice(0, 10) }} 至 {{ formatDateTime(row.endDate).slice(0, 10) }}</template></el-table-column>
         <el-table-column label="状态" width="105"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
+        <el-table-column label="投喂闸门" width="120"><template #default="{ row }"><RestrictionGate v-if="openByPond.get(row.pondId)" :restriction="openByPond.get(row.pondId)!" @changed="load" /><span v-else class="muted">正常</span></template></el-table-column>
         <el-table-column v-if="canOperate()" label="操作" min-width="250" fixed="right"><template #default="{ row }">
           <el-button v-if="row.status === 'draft'" link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button v-if="row.status === 'draft'" link type="primary" @click="openTransition(row, 'submit')">提交</el-button>
-          <el-button v-if="row.status === 'pending' && canReview()" link type="success" @click="openTransition(row, 'approve')">批准</el-button>
+          <el-tooltip v-if="row.status === 'pending' && canReview() && openByPond.get(row.pondId)" content="停喂闸门未解除，不能批准" placement="top">
+            <span><el-button link type="success" disabled>批准</el-button></span>
+          </el-tooltip>
+          <el-button v-else-if="row.status === 'pending' && canReview()" link type="success" @click="openTransition(row, 'approve')">批准</el-button>
           <el-button v-if="(row.status === 'pending' || row.status === 'approved') && canReview()" link type="warning" @click="openTransition(row, 'revoke')">撤销</el-button>
           <el-button v-if="row.status === 'approved'" link type="primary" @click="generateRecommendation(row)">投喂建议</el-button>
           <el-popconfirm v-if="row.status === 'draft' && canReview()" title="确认删除该草稿？" @confirm="remove(row)"><template #reference><el-button link type="danger">删除</el-button></template></el-popconfirm>

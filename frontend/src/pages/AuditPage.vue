@@ -33,11 +33,11 @@ async function load() {
 }
 
 function entityLabel(value: string) {
-  return ({ pond: '养殖池', water_reading: '水质读数', feeding_plan: '投喂计划', control_execution: '执行记录' } as Record<string, string>)[value] || value
+  return ({ pond: '养殖池', water_reading: '水质读数', feeding_plan: '投喂计划', control_execution: '执行记录', feeding_restriction: '停喂限制' } as Record<string, string>)[value] || value
 }
 
 function actionLabel(value: string) {
-  return ({ create: '创建', update: '更新', delete: '删除', confirm: '确认异常', revise: '版本修订', submit: '提交', approve: '批准', revoke: '撤销', schedule: '安排执行', complete: '完成反馈', execute: '计划执行' } as Record<string, string>)[value] || value
+  return ({ create: '创建', update: '更新', delete: '删除', confirm: '确认异常', revise: '版本修订', submit: '提交', approve: '批准', revoke: '撤销', schedule: '安排执行', complete: '完成反馈', execute: '计划执行', restrict: '建立停喂', handle: '提交处置', release: '解除停喂' } as Record<string, string>)[value] || value
 }
 
 function pretty(value: string) {
@@ -61,8 +61,8 @@ onMounted(load)
       <div class="panel-toolbar">
         <div class="filters audit-filters">
           <el-input v-model="params.search" clearable placeholder="搜索操作人或原因" :prefix-icon="Search" />
-          <el-select v-model="params.entityType" placeholder="全部实体" clearable><el-option label="养殖池" value="pond" /><el-option label="水质读数" value="water_reading" /><el-option label="投喂计划" value="feeding_plan" /><el-option label="执行记录" value="control_execution" /></el-select>
-          <el-select v-model="params.action" placeholder="全部操作" clearable><el-option label="创建" value="create" /><el-option label="更新" value="update" /><el-option label="批准" value="approve" /><el-option label="撤销" value="revoke" /><el-option label="完成反馈" value="complete" /><el-option label="删除" value="delete" /></el-select>
+          <el-select v-model="params.entityType" placeholder="全部实体" clearable><el-option label="养殖池" value="pond" /><el-option label="水质读数" value="water_reading" /><el-option label="投喂计划" value="feeding_plan" /><el-option label="执行记录" value="control_execution" /><el-option label="停喂限制" value="feeding_restriction" /></el-select>
+          <el-select v-model="params.action" placeholder="全部操作" clearable><el-option label="创建" value="create" /><el-option label="更新" value="update" /><el-option label="批准" value="approve" /><el-option label="撤销" value="revoke" /><el-option label="完成反馈" value="complete" /><el-option label="删除" value="delete" /><el-option label="建立停喂" value="restrict" /><el-option label="提交处置" value="handle" /><el-option label="解除停喂" value="release" /></el-select>
         </div>
       </div>
       <el-table v-loading="loading" :data="logs" stripe empty-text="暂无审计记录">

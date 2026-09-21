@@ -60,7 +60,7 @@ func (r *PondRepository) Delete(pond *model.Pond) error {
 }
 
 func (r *PondRepository) DependencyCount(id uint) (int64, error) {
-	var readings, plans, executions int64
+	var readings, plans, executions, restrictions int64
 	if err := r.db.Model(&model.WaterReading{}).Where("pond_id = ?", id).Count(&readings).Error; err != nil {
 		return 0, err
 	}
@@ -70,5 +70,8 @@ func (r *PondRepository) DependencyCount(id uint) (int64, error) {
 	if err := r.db.Model(&model.ControlExecution{}).Where("pond_id = ?", id).Count(&executions).Error; err != nil {
 		return 0, err
 	}
-	return readings + plans + executions, nil
+	if err := r.db.Model(&model.FeedingRestriction{}).Where("pond_id = ?", id).Count(&restrictions).Error; err != nil {
+		return 0, err
+	}
+	return readings + plans + executions + restrictions, nil
 }

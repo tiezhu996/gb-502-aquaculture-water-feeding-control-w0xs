@@ -9,6 +9,7 @@
 - 投喂计划：草稿修订自动升版，支持提交、批准和撤销；批准时会校验水质与溶解氧阈值。
 - 投喂建议：结合已批准计划、24 小时内水质、天气和生长阶段，输出正常投喂、减量或暂停。
 - 执行反馈：仅允许已批准计划进入执行，记录实际量、现场溶解氧与反馈。
+- 投喂安全闸门：同一池塘出现严重水质异常时自动建立停喂限制（active），阻止计划批准和新建投喂执行；操作员提交处置说明后转 handled，主管仅能在异常后出现新正常读数且填写复核依据时解除（released）。重复或并发异常、处置与解除只能有一个成功。
 - 安全与审计：JWT、RBAC、请求 ID、全局异常恢复、Redis 限流和实体变更前后快照。
 
 ## 快速启动
@@ -52,8 +53,9 @@ docker compose down
 2. 在“水质读数”录入当前指标；如判定异常，先进行现场复核和确认。
 3. 在“投喂计划”创建草稿并提交，主管检查最新水质后批准。
 4. 已批准计划可输入天气窗口生成实时投喂建议。
-5. 在“执行反馈”安排、开始并提交实际结果。完成后计划进入 `executed`。
-6. 管理员或主管可在“操作审计”查看人员、原因、请求 ID 和变更快照。
+5. 在"执行反馈"安排、开始并提交实际结果。完成后计划进入 `executed`。
+6. 出现严重水质异常时系统自动建立停喂限制：操作员在水质/池塘/执行页提交处置说明，待恢复正常读数后主管填写复核依据解除，投喂流程恢复。
+7. 管理员或主管可在"操作审计"查看人员、原因、请求 ID 和变更快照。
 
 ## 项目结构
 
@@ -80,9 +82,10 @@ docker compose down
 - Go：`backend/internal/constants/enums.go`
   - `PondStatus`: `active` / `quarantine` / `closed`
   - `PlanStatus`: `draft` / `pending` / `approved` / `executed`
-  - `RiskLevel`、`ExecutionStatus`、`Role`
+  - `RiskLevel`、`ExecutionStatus`、`RestrictionStatus`、`Role`
 - TypeScript：`frontend/src/types/enums.ts`
   - 与 Go 取值一致，同时提供界面文案映射。
+  - `RestrictionStatus`: `active`（停喂中）/ `handled`（待主管解除）/ `released`（已解除）。
 
 ### 核心实体跨层文件
 
@@ -92,8 +95,9 @@ docker compose down
 | `WaterReading` | `model/water_reading.go` | `dto/reading.go` | `repository/reading_repository.go` | `service/reading_service.go` | `handler/reading_handler.go` | `api/readings.ts` | `pages/ReadingsPage.vue` |
 | `FeedingPlan` | `model/feeding_plan.go` | `dto/plan.go` | `repository/plan_repository.go` | `service/plan_service.go` | `handler/plan_handler.go` | `api/plans.ts` | `pages/PlansPage.vue` |
 | `ControlExecution` | `model/control_execution.go` | `dto/execution.go` | `repository/execution_repository.go` | `service/execution_service.go` | `handler/execution_handler.go` | `api/executions.ts` | `pages/ExecutionsPage.vue` |
+| `FeedingRestriction` | `model/feeding_restriction.go` | `dto/restriction.go` | `repository/restriction_repository.go` | `service/restriction_service.go` | `handler/restriction_handler.go` | `api/restrictions.ts` | `components/common/RestrictionGate.vue`（池塘/读数/计划/执行页共用） |
 
-`RiskTag` 在养殖池和水质页共用，`PlanDrawer` 在计划和执行页共用。`StatusBadge`、`MetricCard`、`ConfirmDialog` 位于 `frontend/src/components/common/`；`useAuth`、`useQueryParams` 位于 `frontend/src/hooks/`。
+`RiskTag` 在养殖池和水质页共用，`PlanDrawer` 在计划和执行页共用，`RestrictionGate` 在养殖池、水质、计划和执行页共用（处置/解除弹窗内聚于组件）。`StatusBadge`、`MetricCard`、`ConfirmDialog` 位于 `frontend/src/components/common/`；`useAuth`、`useQueryParams`、`useRestrictions` 位于 `frontend/src/hooks/`。
 
 ## API 摘要
 
@@ -110,6 +114,9 @@ docker compose down
 | `GET` | `/api/plans/recommendation?pondId=1&weather=晴朗` | 生成投喂建议 |
 | `GET/POST` | `/api/executions` | 执行记录列表/安排 |
 | `PATCH` | `/api/executions/:id/complete` | 提交实际数量与反馈 |
+| `GET` | `/api/restrictions` | 停喂限制列表（可按 `pondId`、`status` 过滤） |
+| `PATCH` | `/api/restrictions/:id/handle` | 操作员提交处置说明（active→handled） |
+| `PATCH` | `/api/restrictions/:id/release` | 主管复核解除（handled→released，需后续正常读数） |
 | `GET` | `/api/audit` | 管理员/主管查看审计记录 |
 
 错误统一为 `{"error":{"code":"...","message":"...","requestId":"..."}}`，响应头同时包含 `X-Request-ID`。
@@ -146,5 +153,8 @@ docker compose config --quiet
 - 草稿每次编辑版本号加一；非草稿不能直接编辑。
 - 计划批准需要运行中养殖池和最新水质，溶解氧不得低于计划阈值。
 - 执行安排需要 24 小时内水质，严重异常或溶解氧不足会阻断流程。
+- 投喂安全闸门：严重读数与停喂限制在同一事务建立，失败整体回滚；同一池塘部分唯一索引保证至多一条 active/handled 限制，重复或并发严重读数只建限一次。
+- 闸门开启（active/handled）时计划批准与新建投喂执行一律返回 409，不落任何记录；处置（操作员）与解除（主管）均有状态守卫，重复或并发只有一次成功。
+- 解除闸门必须：操作员先提交处置说明，且触发读数之后已重新采集到正常（normal）读数，主管填写复核依据；解除后历史限制保留，再次严重异常可建立新闸门。
 - 实际量与计划量偏差超过 25% 时，必须提供至少 10 个字的说明。
 - 关联了读数、计划或执行记录的养殖池不允许删除。

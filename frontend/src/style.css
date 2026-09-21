@@ -55,6 +55,7 @@ h1, h2, h3, h4, p { margin-top: 0; }
 .system-state span { width: 8px; height: 8px; background: #2a9a79; border-radius: 50%; box-shadow: 0 0 0 3px #dff2ec; }
 .page-container { width: min(100%, 1600px); margin: 0 auto; padding: 24px 28px 40px; }
 .page-stack { display: flex; flex-direction: column; gap: 18px; }
+.restriction-stack { display: flex; flex-direction: column; gap: 10px; }
 
 .metrics-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
 .metric-card { display: flex; align-items: center; gap: 14px; min-height: 92px; padding: 17px; background: var(--surface); border: 1px solid var(--line); border-radius: 7px; }

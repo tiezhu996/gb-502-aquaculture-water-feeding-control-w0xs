@@ -31,9 +31,19 @@ func Open(databaseURL, environment string) (*gorm.DB, error) {
 		&model.WaterReading{},
 		&model.FeedingPlan{},
 		&model.ControlExecution{},
+		&model.FeedingRestriction{},
 		&model.AuditLog{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+	// 投喂安全闸门：同一养殖池至多存在一条未解除（active/handled）的停喂限制。
+	// 部分唯一索引在数据库层兜底，保证重复或并发严重异常只有一次建限成功。
+	if err := db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_feeding_restriction_one_open_per_pond
+		ON feeding_restrictions (pond_id)
+		WHERE status IN ('active', 'handled')
+	`).Error; err != nil {
+		return nil, fmt.Errorf("create feeding restriction partial index: %w", err)
 	}
 	if err := seed(db); err != nil {
 		return nil, fmt.Errorf("seed database: %w", err)

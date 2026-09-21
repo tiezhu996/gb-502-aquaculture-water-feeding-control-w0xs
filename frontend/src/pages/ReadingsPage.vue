@@ -6,15 +6,18 @@ import { readingApi } from '@/api/readings'
 import { pondApi } from '@/api/ponds'
 import MetricCard from '@/components/common/MetricCard.vue'
 import RiskTag from '@/components/common/RiskTag.vue'
+import RestrictionGate from '@/components/common/RestrictionGate.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useAuth } from '@/hooks/useAuth'
 import { useQueryParams } from '@/hooks/useQueryParams'
+import { useRestrictions } from '@/hooks/useRestrictions'
 import type { Pond, WaterReading, WaterReadingInput } from '@/types/models'
 import { errorMessage } from '@/utils/errors'
 import { formatDateTime, toISO, toLocalInput } from '@/utils/format'
 
 const { canOperate, canReview } = useAuth()
 const { params } = useQueryParams({ status: '', pondId: '', page: 1 })
+const { openRestrictions, load: loadRestrictions } = useRestrictions()
 const readings = ref<WaterReading[]>([])
 const ponds = ref<Pond[]>([])
 const total = ref(0)
@@ -31,6 +34,11 @@ const form = reactive<WaterReadingInput>({ pondId: 0, dissolvedOxygen: 6, temper
 const warningCount = computed(() => readings.value.filter((item) => item.riskLevel === 'warning').length)
 const criticalCount = computed(() => readings.value.filter((item) => item.riskLevel === 'critical').length)
 const unconfirmedCount = computed(() => readings.value.filter((item) => item.riskLevel !== 'normal' && !item.confirmed).length)
+// 跟随池塘筛选展示对应闸门；未筛选时展示全部未解除闸门。
+const visibleRestrictions = computed(() => {
+  const pondId = Number(params.pondId)
+  return pondId ? openRestrictions.value.filter((item) => item.pondId === pondId) : openRestrictions.value
+})
 
 async function load() {
   loading.value = true
@@ -42,6 +50,7 @@ async function load() {
     readings.value = result.items
     total.value = result.total
     ponds.value = pondResult.items
+    await loadRestrictions()
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
@@ -124,6 +133,9 @@ onMounted(load)
       <MetricCard label="正常" :value="readings.length - warningCount - criticalCount" :icon="CircleCheck" tone="green" />
       <MetricCard label="预警 / 严重" :value="`${warningCount} / ${criticalCount}`" :icon="Warning" tone="amber" />
       <MetricCard label="待确认异常" :value="unconfirmedCount" :icon="Bell" tone="red" hint="需人工复核" />
+    </section>
+    <section v-if="visibleRestrictions.length" class="restriction-stack">
+      <RestrictionGate v-for="restriction in visibleRestrictions" :key="restriction.id" :restriction="restriction" variant="banner" @changed="load" />
     </section>
     <section class="workspace-panel">
       <div class="panel-toolbar">

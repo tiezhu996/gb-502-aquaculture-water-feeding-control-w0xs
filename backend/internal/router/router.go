@@ -14,13 +14,14 @@ import (
 )
 
 type Handlers struct {
-	Auth       *handler.AuthHandler
-	Health     *handler.HealthHandler
-	Ponds      *handler.PondHandler
-	Readings   *handler.ReadingHandler
-	Plans      *handler.PlanHandler
-	Executions *handler.ExecutionHandler
-	Audit      *handler.AuditHandler
+	Auth         *handler.AuthHandler
+	Health       *handler.HealthHandler
+	Ponds        *handler.PondHandler
+	Readings     *handler.ReadingHandler
+	Plans        *handler.PlanHandler
+	Executions   *handler.ExecutionHandler
+	Restrictions *handler.RestrictionHandler
+	Audit        *handler.AuditHandler
 }
 
 func New(cfg config.Config, redisClient *redis.Client, auth *service.AuthService, h Handlers) *gin.Engine {
@@ -88,6 +89,16 @@ func New(cfg config.Config, redisClient *redis.Client, auth *service.AuthService
 	executionWrite.PUT("/:id", h.Executions.Update)
 	executionWrite.PATCH("/:id/complete", h.Executions.Complete)
 	executionWrite.DELETE("/:id", h.Executions.Delete)
+
+	// 投喂安全闸门（停喂限制）：所有登录用户可查看状态；操作员提交处置，主管复核解除。
+	protected.GET("/restrictions", h.Restrictions.List)
+	protected.GET("/restrictions/:id", h.Restrictions.Get)
+	restrictionHandle := protected.Group("/restrictions")
+	restrictionHandle.Use(middleware.RequireRoles("admin", "manager", "operator"))
+	restrictionHandle.PATCH("/:id/handle", h.Restrictions.Handle)
+	restrictionReview := protected.Group("/restrictions")
+	restrictionReview.Use(middleware.RequireRoles("admin", "manager"))
+	restrictionReview.PATCH("/:id/release", h.Restrictions.Release)
 
 	audit := protected.Group("/audit")
 	audit.Use(middleware.RequireRoles("admin", "manager"))
