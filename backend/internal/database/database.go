@@ -31,14 +31,28 @@ func Open(databaseURL, environment string) (*gorm.DB, error) {
 		&model.WaterReading{},
 		&model.FeedingPlan{},
 		&model.ControlExecution{},
+		&model.FeedingRestriction{},
 		&model.AuditLog{},
 	); err != nil {
 		return nil, fmt.Errorf("migrate database: %w", err)
+	}
+	if err := ensureSafetyIndexes(db); err != nil {
+		return nil, fmt.Errorf("create safety indexes: %w", err)
 	}
 	if err := seed(db); err != nil {
 		return nil, fmt.Errorf("seed database: %w", err)
 	}
 	return db, nil
+}
+
+func ensureSafetyIndexes(db *gorm.DB) error {
+	// 部分唯一索引：同一养殖池至多存在一条生效中（active/disposed）的停喂限制，
+	// 解除后可为后续异常再次建立记录。CREATE INDEX IF NOT EXISTS 保证迁移幂等。
+	return db.Exec(`
+		CREATE UNIQUE INDEX IF NOT EXISTS idx_feeding_restriction_one_active
+		ON feeding_restrictions (pond_id)
+		WHERE status IN ('active', 'disposed')
+	`).Error
 }
 
 func seed(db *gorm.DB) error {

@@ -4,12 +4,16 @@ import { ElMessage } from 'element-plus'
 import { CircleCheck, Clock, DocumentChecked, Plus, Search, TrendCharts } from '@element-plus/icons-vue'
 import { planApi } from '@/api/plans'
 import { pondApi } from '@/api/ponds'
+import { restrictionApi } from '@/api/restrictions'
 import MetricCard from '@/components/common/MetricCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import RestrictionTag from '@/components/common/RestrictionTag.vue'
+import RestrictionAlert from '@/components/common/RestrictionAlert.vue'
+import RestrictionDialog from '@/components/common/RestrictionDialog.vue'
 import PlanDrawer from '@/components/common/PlanDrawer.vue'
 import { useAuth } from '@/hooks/useAuth'
 import { useQueryParams } from '@/hooks/useQueryParams'
-import type { FeedingPlan, FeedingPlanInput, FeedingRecommendation, Pond } from '@/types/models'
+import type { FeedingPlan, FeedingPlanInput, FeedingRecommendation, FeedingRestriction, Pond } from '@/types/models'
 import { errorMessage } from '@/utils/errors'
 import { formatDateTime, formatNumber, toISO, toLocalInput } from '@/utils/format'
 
@@ -17,6 +21,7 @@ const { canOperate, canReview } = useAuth()
 const { params } = useQueryParams({ search: '', status: '', pondId: '', page: 1 })
 const plans = ref<FeedingPlan[]>([])
 const ponds = ref<Pond[]>([])
+const restrictions = ref<FeedingRestriction[]>([])
 const total = ref(0)
 const loading = ref(false)
 const saving = ref(false)
@@ -24,6 +29,8 @@ const editorOpen = ref(false)
 const drawerOpen = ref(false)
 const transitionOpen = ref(false)
 const recommendationOpen = ref(false)
+const restrictionDialogOpen = ref(false)
+const activeRestriction = ref<FeedingRestriction | null>(null)
 const editingId = ref<number | null>(null)
 const selected = ref<FeedingPlan | null>(null)
 const transitionAction = ref<'submit' | 'approve' | 'revoke'>('submit')
@@ -40,21 +47,49 @@ const approvedCount = computed(() => plans.value.filter((item) => item.status ==
 const dailyTotal = computed(() => plans.value.filter((item) => item.status === 'approved').reduce((sum, item) => sum + item.dailyAmountKg, 0))
 const transitionTitle = computed(() => ({ submit: '提交审核', approve: '批准计划', revoke: '撤销计划' }[transitionAction.value]))
 
+const restrictionMap = computed(() => {
+  const map = new Map<number, FeedingRestriction>()
+  for (const item of restrictions.value) map.set(item.pondId, item)
+  return map
+})
+// 按当前池塘筛选，未筛选时展示全部生效限制中的第一条，供顶部告警条使用。
+const visibleRestrictions = computed(() =>
+  params.pondId ? restrictions.value.filter((item) => item.pondId === Number(params.pondId)) : restrictions.value,
+)
+const topRestriction = computed(
+  () =>
+    visibleRestrictions.value.find((item) => item.status === 'active') ||
+    visibleRestrictions.value.find((item) => item.status === 'disposed') ||
+    null,
+)
+
 async function load() {
   loading.value = true
   try {
-    const [result, pondResult] = await Promise.all([
+    const [result, pondResult, restrictionResult] = await Promise.all([
       planApi.list({ page: Number(params.page), pageSize: 20, search: String(params.search), status: String(params.status), pondId: Number(params.pondId) || undefined }),
       pondApi.list({ page: 1, pageSize: 100 }),
+      restrictionApi.list({ page: 1, pageSize: 100, pondId: Number(params.pondId) || undefined, status: 'active,disposed' }),
     ])
     plans.value = result.items
     total.value = result.total
     ponds.value = pondResult.items
+    restrictions.value = restrictionResult.items
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
     loading.value = false
   }
+}
+
+function openRestriction(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  restrictionDialogOpen.value = true
+}
+
+function onRestrictionSaved(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  void load()
 }
 
 function openCreate() {
@@ -159,6 +194,7 @@ onMounted(load)
       <MetricCard label="已批准" :value="approvedCount" :icon="CircleCheck" tone="blue" />
       <MetricCard label="已批准日投喂" :value="`${formatNumber(dailyTotal)} kg`" :icon="TrendCharts" tone="green" />
     </section>
+    <RestrictionAlert v-if="topRestriction" :restriction="topRestriction" @manage="openRestriction" />
     <section class="workspace-panel">
       <div class="panel-toolbar">
         <div class="filters">
@@ -174,10 +210,22 @@ onMounted(load)
         <el-table-column label="饲料 / 阶段" min-width="160"><template #default="{ row }"><div class="primary-cell"><span>{{ row.feedType }}</span><small>{{ row.targetGrowthStage }}</small></div></template></el-table-column>
         <el-table-column label="计划周期" min-width="170"><template #default="{ row }">{{ formatDateTime(row.startDate).slice(0, 10) }} 至 {{ formatDateTime(row.endDate).slice(0, 10) }}</template></el-table-column>
         <el-table-column label="状态" width="105"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
+        <el-table-column label="投喂闸门" min-width="170"><template #default="{ row }">
+          <template v-if="restrictionMap.get(row.pondId)">
+            <div class="gate-cell">
+              <RestrictionTag :status="restrictionMap.get(row.pondId)!.status" />
+              <small class="muted gate-reason">{{ restrictionMap.get(row.pondId)!.triggerReason }}</small>
+            </div>
+          </template>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
         <el-table-column v-if="canOperate()" label="操作" min-width="250" fixed="right"><template #default="{ row }">
           <el-button v-if="row.status === 'draft'" link type="primary" @click="openEdit(row)">编辑</el-button>
           <el-button v-if="row.status === 'draft'" link type="primary" @click="openTransition(row, 'submit')">提交</el-button>
-          <el-button v-if="row.status === 'pending' && canReview()" link type="success" @click="openTransition(row, 'approve')">批准</el-button>
+          <el-tooltip v-if="row.status === 'pending' && canReview() && restrictionMap.get(row.pondId)" content="该池塘停喂限制生效中，处置解除前不能批准" placement="top">
+            <span><el-button link type="success" disabled>批准</el-button></span>
+          </el-tooltip>
+          <el-button v-else-if="row.status === 'pending' && canReview()" link type="success" @click="openTransition(row, 'approve')">批准</el-button>
           <el-button v-if="(row.status === 'pending' || row.status === 'approved') && canReview()" link type="warning" @click="openTransition(row, 'revoke')">撤销</el-button>
           <el-button v-if="row.status === 'approved'" link type="primary" @click="generateRecommendation(row)">投喂建议</el-button>
           <el-popconfirm v-if="row.status === 'draft' && canReview()" title="确认删除该草稿？" @confirm="remove(row)"><template #reference><el-button link type="danger">删除</el-button></template></el-popconfirm>
@@ -215,5 +263,11 @@ onMounted(load)
       <el-skeleton v-else :rows="4" animated />
     </el-dialog>
     <PlanDrawer v-model="drawerOpen" :plan="selected" />
+    <RestrictionDialog v-model="restrictionDialogOpen" :restriction="activeRestriction" @saved="onRestrictionSaved" />
   </div>
 </template>
+
+<style scoped>
+.gate-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.gate-reason { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>

@@ -5,6 +5,7 @@ import (
 	"aquaculture-water-feeding-control/backend/internal/dto"
 	"aquaculture-water-feeding-control/backend/internal/model"
 	"aquaculture-water-feeding-control/backend/internal/repository"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -17,6 +18,7 @@ type PlanService struct {
 	repo          *repository.PlanRepository
 	ponds         *repository.PondRepository
 	readings      *repository.ReadingRepository
+	restrictions  *repository.RestrictionRepository
 	audit         *AuditService
 	transactional bool
 }
@@ -25,7 +27,8 @@ func (s *PlanService) withinTransaction(fn func(*PlanService) error) error {
 	return s.audit.WithinTransaction(func(tx *gorm.DB, audit *AuditService) error {
 		scoped := &PlanService{
 			repo: repository.NewPlanRepository(tx), ponds: repository.NewPondRepository(tx),
-			readings: repository.NewReadingRepository(tx), audit: audit, transactional: true,
+			readings: repository.NewReadingRepository(tx), restrictions: repository.NewRestrictionRepository(tx),
+			audit: audit, transactional: true,
 		}
 		return fn(scoped)
 	})
@@ -106,8 +109,8 @@ func (s *PlanService) Recommendation(pondID uint, weather string) (dto.FeedingRe
 	}, nil
 }
 
-func NewPlanService(repo *repository.PlanRepository, ponds *repository.PondRepository, readings *repository.ReadingRepository, audit *AuditService) *PlanService {
-	return &PlanService{repo: repo, ponds: ponds, readings: readings, audit: audit}
+func NewPlanService(repo *repository.PlanRepository, ponds *repository.PondRepository, readings *repository.ReadingRepository, restrictions *repository.RestrictionRepository, audit *AuditService) *PlanService {
+	return &PlanService{repo: repo, ponds: ponds, readings: readings, restrictions: restrictions, audit: audit}
 }
 
 func (s *PlanService) List(query dto.PageQuery, pondID uint) (dto.PageResult[model.FeedingPlan], error) {
@@ -239,6 +242,11 @@ func (s *PlanService) Approve(id uint, reason string, actor Actor) (model.Feedin
 	}
 	if pond.Status != constants.PondStatusActive {
 		return model.FeedingPlan{}, NewError(CodeConflict, "只有运行中养殖池的计划可批准")
+	}
+	if _, err := s.restrictions.ActiveForPondForUpdate(plan.PondID); err == nil {
+		return model.FeedingPlan{}, NewError(CodeConflict, "该养殖池存在生效中的停喂限制，处置解除前不能批准投喂计划")
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		return model.FeedingPlan{}, WrapError(CodeInternal, "查询停喂限制失败", err)
 	}
 	latest, err := s.readings.LatestForPond(plan.PondID)
 	if err == gorm.ErrRecordNotFound {

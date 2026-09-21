@@ -4,24 +4,31 @@ import { ElMessage } from 'element-plus'
 import { CircleCheck, Grid, Plus, Search, Warning } from '@element-plus/icons-vue'
 import { pondApi } from '@/api/ponds'
 import { readingApi } from '@/api/readings'
+import { restrictionApi } from '@/api/restrictions'
 import MetricCard from '@/components/common/MetricCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
 import RiskTag from '@/components/common/RiskTag.vue'
+import RestrictionTag from '@/components/common/RestrictionTag.vue'
+import RestrictionAlert from '@/components/common/RestrictionAlert.vue'
+import RestrictionDialog from '@/components/common/RestrictionDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useAuth } from '@/hooks/useAuth'
 import { useQueryParams } from '@/hooks/useQueryParams'
-import type { Pond, PondInput, WaterReading } from '@/types/models'
+import type { FeedingRestriction, Pond, PondInput, WaterReading } from '@/types/models'
 import type { RiskLevel } from '@/types/enums'
 import { formatNumber } from '@/utils/format'
 import { errorMessage } from '@/utils/errors'
 
-const { canManagePonds } = useAuth()
+const { canManagePonds, canOperate, canReview } = useAuth()
 const { params } = useQueryParams({ search: '', status: '', page: 1 })
 const loading = ref(false)
 const saving = ref(false)
 const ponds = ref<Pond[]>([])
 const total = ref(0)
 const readings = ref<WaterReading[]>([])
+const restrictions = ref<FeedingRestriction[]>([])
+const restrictionDialogOpen = ref(false)
+const activeRestriction = ref<FeedingRestriction | null>(null)
 const editorOpen = ref(false)
 const deleteOpen = ref(false)
 const editingId = ref<number | null>(null)
@@ -31,28 +38,52 @@ const form = reactive<PondInput>(emptyForm())
 
 const activeCount = computed(() => ponds.value.filter((item) => item.status === 'active').length)
 const quarantineCount = computed(() => ponds.value.filter((item) => item.status === 'quarantine').length)
-const capacity = computed(() => ponds.value.reduce((sum, item) => sum + item.capacityKg, 0))
 const latestRisk = computed(() => {
   const map = new Map<number, RiskLevel>()
   for (const item of readings.value) if (!map.has(item.pondId)) map.set(item.pondId, item.riskLevel)
   return map
 })
+const restrictionMap = computed(() => {
+  const map = new Map<number, FeedingRestriction>()
+  for (const item of restrictions.value) map.set(item.pondId, item)
+  return map
+})
+const restrictedCount = computed(() => restrictions.value.length)
+const topRestriction = computed(
+  () =>
+    restrictions.value.find((item) => item.status === 'active') ||
+    restrictions.value.find((item) => item.status === 'disposed') ||
+    null,
+)
+const canHandleRestriction = computed(() => canOperate() || canReview())
 
 async function load() {
   loading.value = true
   try {
-    const [pondResult, readingResult] = await Promise.all([
+    const [pondResult, readingResult, restrictionResult] = await Promise.all([
       pondApi.list({ page: Number(params.page), pageSize: 20, search: String(params.search), status: String(params.status) }),
       readingApi.list({ page: 1, pageSize: 100 }),
+      restrictionApi.list({ page: 1, pageSize: 100, status: 'active,disposed' }),
     ])
     ponds.value = pondResult.items
     total.value = pondResult.total
     readings.value = readingResult.items
+    restrictions.value = restrictionResult.items
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
     loading.value = false
   }
+}
+
+function openRestriction(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  restrictionDialogOpen.value = true
+}
+
+function onRestrictionSaved(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  void load()
 }
 
 function openCreate() {
@@ -118,8 +149,9 @@ onMounted(load)
       <MetricCard label="养殖池总数" :value="total" :icon="Grid" hint="当前管辖" />
       <MetricCard label="运行中" :value="activeCount" :icon="CircleCheck" tone="blue" hint="可执行投喂" />
       <MetricCard label="隔离观察" :value="quarantineCount" :icon="Warning" tone="amber" hint="需续评水质" />
-      <MetricCard label="页内养殖容量" :value="`${formatNumber(capacity / 1000)} t`" :icon="Grid" tone="green" />
+      <MetricCard label="停喂限制" :value="restrictedCount" :icon="Warning" tone="red" hint="投喂闸门生效中" />
     </section>
+    <RestrictionAlert v-if="topRestriction" :restriction="topRestriction" @manage="openRestriction" />
     <section class="workspace-panel">
       <div class="panel-toolbar">
         <div class="filters">
@@ -136,6 +168,18 @@ onMounted(load)
         <el-table-column label="面积 / 容量" min-width="150"><template #default="{ row }">{{ formatNumber(row.areaSquareMeters, 0) }} ㎡ / {{ formatNumber(row.capacityKg / 1000) }} t</template></el-table-column>
         <el-table-column label="负责人" prop="manager" min-width="100" />
         <el-table-column label="水质风险" width="100"><template #default="{ row }"><RiskTag :level="latestRisk.get(row.id) || (row.status === 'quarantine' ? 'warning' : 'normal')" /></template></el-table-column>
+        <el-table-column label="投喂闸门" min-width="210"><template #default="{ row }">
+          <template v-if="restrictionMap.get(row.id)">
+            <div class="gate-cell">
+              <RestrictionTag :status="restrictionMap.get(row.id)!.status" />
+              <el-button v-if="canHandleRestriction" link type="danger" size="small" @click="openRestriction(restrictionMap.get(row.id)!)">
+                {{ restrictionMap.get(row.id)!.status === 'disposed' ? '复核解除' : '处置' }}
+              </el-button>
+              <small class="muted gate-reason">{{ restrictionMap.get(row.id)!.triggerReason }}</small>
+            </div>
+          </template>
+          <span v-else class="muted">正常</span>
+        </template></el-table-column>
         <el-table-column label="状态" width="110"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
         <el-table-column v-if="canManagePonds()" label="操作" width="130" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row)">编辑</el-button><el-button link type="danger" @click="target = row; deleteOpen = true">删除</el-button></template></el-table-column>
       </el-table>
@@ -156,5 +200,11 @@ onMounted(load)
       <template #footer><el-button @click="editorOpen = false">取消</el-button><el-button type="primary" :loading="saving" @click="save">保存</el-button></template>
     </el-dialog>
     <ConfirmDialog v-model="deleteOpen" title="删除养殖池" :message="`确认删除「${target?.name || ''}」？已有关联数据时系统将拒绝。`" danger :loading="saving" @confirm="remove" />
+    <RestrictionDialog v-model="restrictionDialogOpen" :restriction="activeRestriction" @saved="onRestrictionSaved" />
   </div>
 </template>
+
+<style scoped>
+.gate-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.gate-reason { max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>

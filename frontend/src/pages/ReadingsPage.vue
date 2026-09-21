@@ -4,12 +4,15 @@ import { ElMessage } from 'element-plus'
 import { Bell, CircleCheck, DataAnalysis, Plus, Warning } from '@element-plus/icons-vue'
 import { readingApi } from '@/api/readings'
 import { pondApi } from '@/api/ponds'
+import { restrictionApi } from '@/api/restrictions'
 import MetricCard from '@/components/common/MetricCard.vue'
 import RiskTag from '@/components/common/RiskTag.vue'
+import RestrictionAlert from '@/components/common/RestrictionAlert.vue'
+import RestrictionDialog from '@/components/common/RestrictionDialog.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useAuth } from '@/hooks/useAuth'
 import { useQueryParams } from '@/hooks/useQueryParams'
-import type { Pond, WaterReading, WaterReadingInput } from '@/types/models'
+import type { FeedingRestriction, Pond, WaterReading, WaterReadingInput } from '@/types/models'
 import { errorMessage } from '@/utils/errors'
 import { formatDateTime, toISO, toLocalInput } from '@/utils/format'
 
@@ -17,12 +20,15 @@ const { canOperate, canReview } = useAuth()
 const { params } = useQueryParams({ status: '', pondId: '', page: 1 })
 const readings = ref<WaterReading[]>([])
 const ponds = ref<Pond[]>([])
+const restrictions = ref<FeedingRestriction[]>([])
 const total = ref(0)
 const loading = ref(false)
 const saving = ref(false)
 const editorOpen = ref(false)
 const confirmOpen = ref(false)
 const deleteOpen = ref(false)
+const restrictionDialogOpen = ref(false)
+const activeRestriction = ref<FeedingRestriction | null>(null)
 const target = ref<WaterReading | null>(null)
 const confirmationNote = ref('')
 const measuredAtLocal = ref(toLocalInput())
@@ -31,22 +37,43 @@ const form = reactive<WaterReadingInput>({ pondId: 0, dissolvedOxygen: 6, temper
 const warningCount = computed(() => readings.value.filter((item) => item.riskLevel === 'warning').length)
 const criticalCount = computed(() => readings.value.filter((item) => item.riskLevel === 'critical').length)
 const unconfirmedCount = computed(() => readings.value.filter((item) => item.riskLevel !== 'normal' && !item.confirmed).length)
+const visibleRestrictions = computed(() =>
+  params.pondId ? restrictions.value.filter((item) => item.pondId === Number(params.pondId)) : restrictions.value,
+)
+const topRestriction = computed(
+  () =>
+    visibleRestrictions.value.find((item) => item.status === 'active') ||
+    visibleRestrictions.value.find((item) => item.status === 'disposed') ||
+    null,
+)
 
 async function load() {
   loading.value = true
   try {
-    const [result, pondResult] = await Promise.all([
+    const [result, pondResult, restrictionResult] = await Promise.all([
       readingApi.list({ page: Number(params.page), pageSize: 20, status: String(params.status), pondId: Number(params.pondId) || undefined }),
       pondApi.list({ page: 1, pageSize: 100 }),
+      restrictionApi.list({ page: 1, pageSize: 100, pondId: Number(params.pondId) || undefined, status: 'active,disposed' }),
     ])
     readings.value = result.items
     total.value = result.total
     ponds.value = pondResult.items
+    restrictions.value = restrictionResult.items
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
     loading.value = false
   }
+}
+
+function openRestriction(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  restrictionDialogOpen.value = true
+}
+
+function onRestrictionSaved(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  void load()
 }
 
 function openCreate() {
@@ -125,6 +152,7 @@ onMounted(load)
       <MetricCard label="预警 / 严重" :value="`${warningCount} / ${criticalCount}`" :icon="Warning" tone="amber" />
       <MetricCard label="待确认异常" :value="unconfirmedCount" :icon="Bell" tone="red" hint="需人工复核" />
     </section>
+    <RestrictionAlert v-if="topRestriction" :restriction="topRestriction" @manage="openRestriction" />
     <section class="workspace-panel">
       <div class="panel-toolbar">
         <div class="filters">
@@ -166,5 +194,6 @@ onMounted(load)
       <template #footer><el-button @click="confirmOpen = false">取消</el-button><el-button type="primary" :loading="saving" @click="confirmReading">确认并留痕</el-button></template>
     </el-dialog>
     <ConfirmDialog v-model="deleteOpen" title="删除手工读数" message="删除后仍会保留操作审计，确认继续？" danger :loading="saving" @confirm="remove" />
+    <RestrictionDialog v-model="restrictionDialogOpen" :restriction="activeRestriction" @saved="onRestrictionSaved" />
   </div>
 </template>

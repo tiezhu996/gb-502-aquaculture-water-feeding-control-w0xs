@@ -36,23 +36,26 @@ func main() {
 	readingRepo := repository.NewReadingRepository(db)
 	planRepo := repository.NewPlanRepository(db)
 	executionRepo := repository.NewExecutionRepository(db)
+	restrictionRepo := repository.NewRestrictionRepository(db)
 	auditRepo := repository.NewAuditRepository(db)
 
 	auditService := service.NewAuditService(auditRepo)
 	authService := service.NewAuthService(userRepo, cfg.JWTSecret, cfg.TokenTTL)
 	pondService := service.NewPondService(pondRepo, auditService)
-	readingService := service.NewReadingService(readingRepo, pondRepo, auditService)
-	planService := service.NewPlanService(planRepo, pondRepo, readingRepo, auditService)
-	executionService := service.NewExecutionService(executionRepo, planRepo, pondRepo, readingRepo, auditService)
+	restrictionService := service.NewRestrictionService(restrictionRepo, pondRepo, readingRepo, auditService)
+	readingService := service.NewReadingService(readingRepo, pondRepo, restrictionService, auditService)
+	planService := service.NewPlanService(planRepo, pondRepo, readingRepo, restrictionRepo, auditService)
+	executionService := service.NewExecutionService(executionRepo, planRepo, pondRepo, readingRepo, restrictionRepo, auditService)
 
 	handlers := router.Handlers{
-		Auth:       handler.NewAuthHandler(authService),
-		Health:     handler.NewHealthHandler(db, redisClient),
-		Ponds:      handler.NewPondHandler(pondService),
-		Readings:   handler.NewReadingHandler(readingService),
-		Plans:      handler.NewPlanHandler(planService),
-		Executions: handler.NewExecutionHandler(executionService),
-		Audit:      handler.NewAuditHandler(auditService),
+		Auth:         handler.NewAuthHandler(authService),
+		Health:       handler.NewHealthHandler(db, redisClient),
+		Ponds:        handler.NewPondHandler(pondService),
+		Readings:     handler.NewReadingHandler(readingService),
+		Plans:        handler.NewPlanHandler(planService),
+		Executions:   handler.NewExecutionHandler(executionService),
+		Restrictions: handler.NewRestrictionHandler(restrictionService),
+		Audit:        handler.NewAuditHandler(auditService),
 	}
 	engine := router.New(cfg, redisClient, authService, handlers)
 	server := &http.Server{

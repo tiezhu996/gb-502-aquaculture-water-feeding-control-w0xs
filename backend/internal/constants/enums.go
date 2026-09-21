@@ -69,3 +69,15 @@ const (
 	ExecutionCompleted ExecutionStatus = "completed"
 	ExecutionCancelled ExecutionStatus = "cancelled"
 )
+
+type RestrictionStatus string
+
+const (
+	RestrictionActive   RestrictionStatus = "active"
+	RestrictionDisposed RestrictionStatus = "disposed"
+	RestrictionReleased RestrictionStatus = "released"
+)
+
+func (s RestrictionStatus) Valid() bool {
+	return s == RestrictionActive || s == RestrictionDisposed || s == RestrictionReleased
+}

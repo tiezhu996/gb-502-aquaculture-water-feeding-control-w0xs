@@ -1,4 +1,4 @@
-import type { ExecutionStatus, PlanStatus, PondStatus, RiskLevel, UserRole } from './enums'
+import type { ExecutionStatus, PlanStatus, PondStatus, RestrictionStatus, RiskLevel, UserRole } from './enums'
 
 export interface BaseModel {
   id: number
@@ -77,6 +77,26 @@ export interface ControlExecution extends BaseModel {
   weather: string
   oxygenSnapshot: number
   feedback: string
+}
+
+export interface FeedingRestriction extends BaseModel {
+  pondId: number
+  pond?: Pond
+  status: RestrictionStatus
+  triggerReadingId: number
+  triggerReading?: WaterReading
+  triggerRiskLevel: RiskLevel
+  triggerReason: string
+  triggerMeasuredAt: string
+  triggeredBy: string
+  dispositionNote: string
+  disposedBy: string
+  disposedAt?: string
+  normalReadingId?: number
+  normalReading?: WaterReading
+  releaseBasis: string
+  releasedBy: string
+  releasedAt?: string
 }
 
 export interface AuditLog extends BaseModel {

@@ -14,13 +14,14 @@ import (
 )
 
 type Handlers struct {
-	Auth       *handler.AuthHandler
-	Health     *handler.HealthHandler
-	Ponds      *handler.PondHandler
-	Readings   *handler.ReadingHandler
-	Plans      *handler.PlanHandler
-	Executions *handler.ExecutionHandler
-	Audit      *handler.AuditHandler
+	Auth         *handler.AuthHandler
+	Health       *handler.HealthHandler
+	Ponds        *handler.PondHandler
+	Readings     *handler.ReadingHandler
+	Plans        *handler.PlanHandler
+	Executions   *handler.ExecutionHandler
+	Restrictions *handler.RestrictionHandler
+	Audit        *handler.AuditHandler
 }
 
 func New(cfg config.Config, redisClient *redis.Client, auth *service.AuthService, h Handlers) *gin.Engine {
@@ -50,6 +51,7 @@ func New(cfg config.Config, redisClient *redis.Client, auth *service.AuthService
 
 	protected.GET("/ponds", h.Ponds.List)
 	protected.GET("/ponds/:id", h.Ponds.Get)
+	protected.GET("/ponds/:id/restriction", h.Restrictions.ActiveByPond)
 	pondWrite := protected.Group("/ponds")
 	pondWrite.Use(middleware.RequireRoles("admin", "manager"))
 	pondWrite.POST("", h.Ponds.Create)
@@ -88,6 +90,16 @@ func New(cfg config.Config, redisClient *redis.Client, auth *service.AuthService
 	executionWrite.PUT("/:id", h.Executions.Update)
 	executionWrite.PATCH("/:id/complete", h.Executions.Complete)
 	executionWrite.DELETE("/:id", h.Executions.Delete)
+
+	// 投喂安全闸门：停喂限制对所有登录角色可读；操作员/主管提交处置，仅主管/管理员解除。
+	protected.GET("/restrictions", h.Restrictions.List)
+	protected.GET("/restrictions/:id", h.Restrictions.Get)
+	restrictionDispose := protected.Group("/restrictions")
+	restrictionDispose.Use(middleware.RequireRoles("admin", "manager", "operator"))
+	restrictionDispose.PATCH("/:id/dispose", h.Restrictions.Dispose)
+	restrictionRelease := protected.Group("/restrictions")
+	restrictionRelease.Use(middleware.RequireRoles("admin", "manager"))
+	restrictionRelease.PATCH("/:id/release", h.Restrictions.Release)
 
 	audit := protected.Group("/audit")
 	audit.Use(middleware.RequireRoles("admin", "manager"))

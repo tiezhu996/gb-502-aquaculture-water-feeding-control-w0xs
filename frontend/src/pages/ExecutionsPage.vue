@@ -5,13 +5,17 @@ import { CircleCheck, Clock, List, Plus, VideoPlay } from '@element-plus/icons-v
 import { executionApi } from '@/api/executions'
 import { planApi } from '@/api/plans'
 import { pondApi } from '@/api/ponds'
+import { restrictionApi } from '@/api/restrictions'
 import MetricCard from '@/components/common/MetricCard.vue'
 import StatusBadge from '@/components/common/StatusBadge.vue'
+import RestrictionTag from '@/components/common/RestrictionTag.vue'
+import RestrictionAlert from '@/components/common/RestrictionAlert.vue'
+import RestrictionDialog from '@/components/common/RestrictionDialog.vue'
 import PlanDrawer from '@/components/common/PlanDrawer.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useAuth } from '@/hooks/useAuth'
 import { useQueryParams } from '@/hooks/useQueryParams'
-import type { ControlExecution, ExecutionInput, FeedingPlan, Pond } from '@/types/models'
+import type { ControlExecution, ExecutionInput, FeedingPlan, FeedingRestriction, Pond } from '@/types/models'
 import { errorMessage } from '@/utils/errors'
 import { formatDateTime, formatNumber, toISO, toLocalInput } from '@/utils/format'
 
@@ -20,6 +24,7 @@ const { params } = useQueryParams({ status: '', pondId: '', page: 1 })
 const executions = ref<ControlExecution[]>([])
 const ponds = ref<Pond[]>([])
 const plans = ref<FeedingPlan[]>([])
+const restrictions = ref<FeedingRestriction[]>([])
 const total = ref(0)
 const loading = ref(false)
 const saving = ref(false)
@@ -27,6 +32,8 @@ const editorOpen = ref(false)
 const completeOpen = ref(false)
 const deleteOpen = ref(false)
 const drawerOpen = ref(false)
+const restrictionDialogOpen = ref(false)
+const activeRestriction = ref<FeedingRestriction | null>(null)
 const target = ref<ControlExecution | null>(null)
 const selectedPlan = ref<FeedingPlan | null>(null)
 const scheduledLocal = ref(toLocalInput(new Date(Date.now() + 3600000)))
@@ -38,23 +45,52 @@ const runningCount = computed(() => executions.value.filter((item) => item.statu
 const completedAmount = computed(() => executions.value.filter((item) => item.status === 'completed').reduce((sum, item) => sum + item.actualAmountKg, 0))
 const availablePlans = computed(() => plans.value.filter((plan) => plan.status === 'approved' && (!form.pondId || plan.pondId === form.pondId)))
 
+const restrictionMap = computed(() => {
+  const map = new Map<number, FeedingRestriction>()
+  for (const item of restrictions.value) map.set(item.pondId, item)
+  return map
+})
+const visibleRestrictions = computed(() =>
+  params.pondId ? restrictions.value.filter((item) => item.pondId === Number(params.pondId)) : restrictions.value,
+)
+const topRestriction = computed(
+  () =>
+    visibleRestrictions.value.find((item) => item.status === 'active') ||
+    visibleRestrictions.value.find((item) => item.status === 'disposed') ||
+    null,
+)
+// 安排执行对话框当前所选池塘若处于停喂中，则禁止提交。
+const selectedPondRestricted = computed(() => !!restrictionMap.value.get(form.pondId))
+
 async function load() {
   loading.value = true
   try {
-    const [result, pondResult, planResult] = await Promise.all([
+    const [result, pondResult, planResult, restrictionResult] = await Promise.all([
       executionApi.list({ page: Number(params.page), pageSize: 20, status: String(params.status), pondId: Number(params.pondId) || undefined }),
       pondApi.list({ page: 1, pageSize: 100 }),
       planApi.list({ page: 1, pageSize: 100 }),
+      restrictionApi.list({ page: 1, pageSize: 100, pondId: Number(params.pondId) || undefined, status: 'active,disposed' }),
     ])
     executions.value = result.items
     total.value = result.total
     ponds.value = pondResult.items
     plans.value = planResult.items
+    restrictions.value = restrictionResult.items
   } catch (error) {
     ElMessage.error(errorMessage(error))
   } finally {
     loading.value = false
   }
+}
+
+function openRestriction(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  restrictionDialogOpen.value = true
+}
+
+function onRestrictionSaved(restriction: FeedingRestriction) {
+  activeRestriction.value = restriction
+  void load()
 }
 
 function openCreate() {
@@ -76,6 +112,10 @@ function onPlanChange(planId: number) {
 async function create() {
   if (!form.pondId || !form.feedingPlanId || form.plannedAmountKg <= 0) {
     ElMessage.warning('请选择已批准计划并填写数量')
+    return
+  }
+  if (restrictionMap.value.get(form.pondId)) {
+    ElMessage.warning('该养殖池存在生效中的停喂限制，处置解除前不能新建投喂执行')
     return
   }
   saving.value = true
@@ -163,6 +203,7 @@ onMounted(load)
       <MetricCard label="执行中" :value="runningCount" :icon="VideoPlay" tone="blue" />
       <MetricCard label="页内已投喂" :value="`${formatNumber(completedAmount)} kg`" :icon="CircleCheck" tone="green" />
     </section>
+    <RestrictionAlert v-if="topRestriction" :restriction="topRestriction" @manage="openRestriction" />
     <section class="workspace-panel">
       <div class="panel-toolbar">
         <div class="filters">
@@ -178,6 +219,15 @@ onMounted(load)
         <el-table-column label="天气" prop="weather" min-width="130" show-overflow-tooltip />
         <el-table-column label="操作人" prop="operator" width="110" />
         <el-table-column label="状态" width="110"><template #default="{ row }"><StatusBadge :status="row.status" /></template></el-table-column>
+        <el-table-column label="投喂闸门" min-width="170"><template #default="{ row }">
+          <template v-if="restrictionMap.get(row.pondId)">
+            <div class="gate-cell">
+              <RestrictionTag :status="restrictionMap.get(row.pondId)!.status" />
+              <small class="muted gate-reason">{{ restrictionMap.get(row.pondId)!.triggerReason }}</small>
+            </div>
+          </template>
+          <span v-else class="muted">—</span>
+        </template></el-table-column>
         <el-table-column v-if="canOperate()" label="操作" width="190" fixed="right"><template #default="{ row }">
           <el-button v-if="row.status === 'scheduled'" link type="primary" :loading="saving" @click="start(row)">开始</el-button>
           <el-button v-if="row.status === 'scheduled' || row.status === 'running'" link type="success" @click="openComplete(row)">提交反馈</el-button>
@@ -187,15 +237,20 @@ onMounted(load)
       <div class="pagination"><el-pagination v-model:current-page="params.page" layout="total, prev, pager, next" :total="total" :page-size="20" /></div>
     </section>
     <el-dialog v-model="editorOpen" title="安排投喂执行" width="620px">
-      <el-alert title="仅可选择已批准计划；保存时将检查 24 小时内水质" type="info" :closable="false" show-icon />
+      <el-alert v-if="selectedPondRestricted" type="error" :closable="false" show-icon
+        title="该养殖池存在生效中的停喂限制，处置解除前不能新建投喂执行" />
+      <el-alert v-else title="仅可选择已批准计划；保存时将检查 24 小时内水质" type="info" :closable="false" show-icon />
       <el-form label-position="top" class="form-grid form-with-alert">
         <el-form-item label="养殖池"><el-select v-model="form.pondId" @change="form.feedingPlanId = 0"><el-option v-for="pond in ponds.filter((item) => item.status === 'active')" :key="pond.id" :label="pond.name" :value="pond.id" /></el-select></el-form-item>
-        <el-form-item label="已批准计划"><el-select v-model="form.feedingPlanId" @change="onPlanChange"><el-option v-for="plan in availablePlans" :key="plan.id" :label="`${plan.name} · v${plan.version}`" :value="plan.id" /></el-select></el-form-item>
+        <el-form-item label="已批准计划"><el-select v-model="form.feedingPlanId" :disabled="selectedPondRestricted" @change="onPlanChange"><el-option v-for="plan in availablePlans" :key="plan.id" :label="`${plan.name} · v${plan.version}`" :value="plan.id" /></el-select></el-form-item>
         <el-form-item label="执行时间"><el-date-picker v-model="scheduledLocal" type="datetime" value-format="YYYY-MM-DDTHH:mm" /></el-form-item>
         <el-form-item label="计划数量（kg）"><el-input-number v-model="form.plannedAmountKg" :min="0.1" :step="1" /></el-form-item>
         <el-form-item label="天气窗口" class="form-span"><el-input v-model="form.weather" placeholder="例：晴朗，微风" /></el-form-item>
       </el-form>
-      <template #footer><el-button @click="editorOpen = false">取消</el-button><el-button type="primary" :loading="saving" @click="create">确认安排</el-button></template>
+      <template #footer>
+        <el-button @click="editorOpen = false">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="selectedPondRestricted" @click="create">确认安排</el-button>
+      </template>
     </el-dialog>
     <el-dialog v-model="completeOpen" title="提交执行反馈" width="580px">
       <el-form label-position="top" class="form-grid">
@@ -207,5 +262,11 @@ onMounted(load)
     </el-dialog>
     <ConfirmDialog v-model="deleteOpen" title="删除执行安排" message="只能删除尚未开始的执行安排，确认继续？" danger :loading="saving" @confirm="remove" />
     <PlanDrawer v-model="drawerOpen" :plan="selectedPlan" />
+    <RestrictionDialog v-model="restrictionDialogOpen" :restriction="activeRestriction" @saved="onRestrictionSaved" />
   </div>
 </template>
+
+<style scoped>
+.gate-cell { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
+.gate-reason { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
